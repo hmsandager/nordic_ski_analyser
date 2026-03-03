@@ -25,6 +25,7 @@ import webbrowser
 from typing import List
 
 import folium
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -42,10 +43,8 @@ MIN_SEP_M  = 500   # minimum distance between two top-speed markers (metres)
 # ── Speed computation ─────────────────────────────────────────────────────────
 
 def _enrich(df: pd.DataFrame) -> pd.DataFrame:
-    """Add speed_kmh and make cum_dist_m continuous across segments."""
+    """Add speed_kmh, gradient, and make cum_dist_m continuous across segments."""
     df = df.copy()
-    # speed_ms is already the Kalman-smoothed velocity magnitude; no further
-    # smoothing needed
     df["speed_kmh"] = df["speed_ms"] * 3.6
 
     # cum_dist_m resets to 0 at the start of each segment; make it continuous
@@ -54,6 +53,26 @@ def _enrich(df: pd.DataFrame) -> pd.DataFrame:
         mask = df["segment"] == seg_id
         df.loc[mask, "cum_dist_m"] += offset
         offset = df.loc[mask, "cum_dist_m"].iloc[-1]
+
+    # Terrain gradient (rise / run, dimensionless) per step, computed within
+    # each segment so we never diff across a segment boundary.
+    df["gradient"] = np.nan
+    for seg_id in df["segment"].unique():
+        mask  = df["segment"] == seg_id
+        seg   = df[mask]
+        if len(seg) < 2:
+            continue
+        lats    = seg["lat"].values
+        lons    = seg["lon"].values
+        eles    = seg["ele"].values
+        lat_mid = np.radians((lats[:-1] + lats[1:]) / 2)
+        dlat    = np.diff(lats) * 111_319.9
+        dlon    = np.diff(lons) * 111_319.9 * np.cos(lat_mid)
+        horiz   = np.sqrt(dlat ** 2 + dlon ** 2)
+        d_ele   = np.diff(eles)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            grad = np.where(horiz > 0.5, d_ele / horiz, np.nan)
+        df.loc[mask, "gradient"] = np.concatenate([[np.nan], grad])
 
     return df
 
@@ -194,6 +213,100 @@ def build_speed_chart(track: GPXTrack, df: pd.DataFrame, top: pd.DataFrame) -> g
         template="plotly_white",
     )
 
+    return fig
+
+
+# ── Speed histogram ────────────────────────────────────────────────────────────
+
+def build_speed_histogram(df: pd.DataFrame) -> go.Figure:
+    """Histogram of time spent at each speed (0.5 km/h bins)."""
+    speeds = df["speed_kmh"].dropna()
+    median = float(speeds.median())
+
+    bins    = np.arange(0, speeds.max() + 0.5, 0.5)
+    counts, edges = np.histogram(speeds, bins=bins)
+    centres = (edges[:-1] + edges[1:]) / 2
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=centres,
+        y=counts,
+        width=0.48,
+        marker=dict(
+            color=centres,
+            colorscale="RdYlGn",
+            showscale=False,
+        ),
+        name="",
+        showlegend=False,
+        hovertemplate="%{x:.1f} km/h: %{y} pts<extra></extra>",
+    ))
+
+    fig.add_vline(
+        x=median,
+        line=dict(color="black", width=2, dash="dash"),
+        annotation_text=f"Median {median:.1f} km/h",
+        annotation_position="top right",
+    )
+
+    fig.update_layout(
+        title="Speed distribution",
+        xaxis_title="Speed (km/h)",
+        yaxis_title="Time (GPS points ≈ seconds)",
+        bargap=0,
+        margin=dict(t=70, b=50, l=60, r=30),
+        template="plotly_white",
+    )
+    return fig
+
+
+# ── Terrain breakdown ──────────────────────────────────────────────────────────
+
+def build_terrain_breakdown(df: pd.DataFrame, thresh_pct: float = 2.0) -> go.Figure:
+    """
+    Stacked bar chart showing the fraction of time per segment spent
+    climbing, on flat terrain, and descending.
+
+    `thresh_pct` is the gradient threshold (%) that separates flat from
+    climbing / descending.
+    """
+    thresh = thresh_pct / 100.0
+
+    d = df.dropna(subset=["gradient"]).copy()
+    d["terrain"] = "Flat"
+    d.loc[d["gradient"] >  thresh, "terrain"] = "Climb"
+    d.loc[d["gradient"] < -thresh, "terrain"] = "Descent"
+
+    segments = sorted(d["segment"].unique())
+    x_labels = [f"Segment {s + 1}" for s in segments]
+
+    cats = [("Climb", "#e74c3c"), ("Flat", "#bdc3c7"), ("Descent", "#3498db")]
+
+    fig = go.Figure()
+    for cat_name, colour in cats:
+        pcts = []
+        for seg_id in segments:
+            seg_d = d[d["segment"] == seg_id]
+            total = len(seg_d)
+            pcts.append((seg_d["terrain"] == cat_name).sum() / total * 100 if total else 0)
+
+        fig.add_trace(go.Bar(
+            x=x_labels,
+            y=pcts,
+            name=cat_name,
+            marker_color=colour,
+            hovertemplate="%{x}<br>" + cat_name + ": %{y:.1f}%<extra></extra>",
+        ))
+
+    fig.update_layout(
+        barmode="stack",
+        title=f"Terrain breakdown  (±{thresh_pct:.0f}% threshold)",
+        xaxis_title="Segment",
+        yaxis=dict(title="Time (%)", range=[0, 100]),
+        legend=dict(orientation="h", y=1.10),
+        margin=dict(t=70, b=50, l=60, r=30),
+        template="plotly_white",
+    )
     return fig
 
 

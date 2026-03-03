@@ -15,7 +15,10 @@ from strava_auth import auth_url, exchange_code, ensure_valid_token, store_token
 from strava_fetch import list_activities, fetch_points, activity_label
 from gpx_filter import GPXTrack, parse_gpx_bytes, count_trkpt
 from plot_track import build_map, add_layer_control
-from plot_stats import _enrich, find_top_speeds, build_speed_chart, add_top_speed_markers
+from plot_stats import (
+    _enrich, find_top_speeds, build_speed_chart, add_top_speed_markers,
+    build_speed_histogram, build_terrain_breakdown,
+)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -256,6 +259,17 @@ with st.expander("Top 10 fastest locations", expanded=False):
     top_display["ele"]         = top_display["ele"].round(0)
     top_display.columns        = ["Rank", "Speed (km/h)", "Time", "Distance (km)", "Elevation (m)"]
     st.dataframe(top_display, hide_index=True, use_container_width=True)
+
+st.divider()
+
+# ── Analysis charts ───────────────────────────────────────────────────────────
+
+st.subheader("Analysis")
+col_hist, col_terrain = st.columns(2)
+with col_hist:
+    st.plotly_chart(build_speed_histogram(df), use_container_width=True)
+with col_terrain:
+    st.plotly_chart(build_terrain_breakdown(df), use_container_width=True)
 
 st.divider()
 
