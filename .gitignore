@@ -1,0 +1,8 @@
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.gpx
+*_map.html
+*_speed.html
