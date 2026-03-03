@@ -1,0 +1,461 @@
+\documentclass[11pt, a4paper]{article}
+
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{parskip}
+
+\geometry{margin=2.5cm}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue!60!black,
+  urlcolor   = blue!60!black,
+}
+
+% Convenience macros
+\newcommand{\x}{\bm{x}}
+\newcommand{\z}{\bm{z}}
+\newcommand{\y}{\bm{y}}
+\newcommand{\w}{\bm{w}}
+\newcommand{\vv}{\bm{v}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\N}{\mathcal{N}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\given}{\mid}
+
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+% ─────────────────────────────────────────────────────────────────────────────
+
+\title{\textbf{GPS Track Smoothing via the Kalman Filter\\and RTS Backward Smoother}\\[0.4em]
+       \large A Statistical Derivation}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Overview}
+
+Raw GPS recordings of a nordic ski track contain two types of unwanted
+signal: high-frequency \emph{jitter} (Gaussian-like measurement noise of
+a few metres) and occasional hard \emph{spikes} (outlying fixes tens or
+hundreds of metres away from the true path).  A plain smoothing spline
+treats every observation symmetrically and is therefore pulled toward
+spikes.  The approach taken here instead models the data-generating
+process explicitly as a \emph{linear Gaussian state-space model} and
+computes the exact posterior over the latent track using the
+\textbf{Kalman filter} (forward pass) and the \textbf{Rauch--Tung--Striebel
+(RTS) smoother} (backward pass), with a \emph{Mahalanobis innovation gate}
+to reject hard outliers before they enter the filter.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{State-Space Model}
+
+\subsection{Coordinate system}
+
+Each GPS segment is worked in a local flat-Earth Cartesian frame centred on
+the first point of that segment.  Latitude and longitude are converted to
+metres via
+\begin{align}
+  x &= (\lambda - \lambda_0)\cdot 111{,}319.9\cos\phi_0, \\
+  y &= (\phi   - \phi_0)   \cdot 111{,}319.9,
+\end{align}
+where $\phi_0,\lambda_0$ are the reference latitude and longitude in
+radians and degrees, respectively.  This approximation is accurate to
+better than 0.1\,\% for segment lengths below 50\,km.
+
+\subsection{Latent state and observations}
+
+At each time step $t$ define the four-dimensional latent state
+\begin{equation}
+  \x_t = \begin{pmatrix} x_t \\ y_t \\ \dot x_t \\ \dot y_t \end{pmatrix}
+  \in \R^4,
+\end{equation}
+collecting horizontal position $(x_t, y_t)$ and velocity
+$(\dot x_t, \dot y_t)$ in metres and metres per second, respectively.
+The GPS receiver produces the two-dimensional observation
+\begin{equation}
+  \z_t = \begin{pmatrix} x_t^{\mathrm{GPS}} \\ y_t^{\mathrm{GPS}} \end{pmatrix}
+  \in \R^2.
+\end{equation}
+
+\subsection{Transition equation}
+
+We adopt a \emph{constant-velocity model} perturbed by random accelerations:
+\begin{equation}
+  \x_t = F_t\,\x_{t-1} + \w_t, \qquad \w_t \sim \N(\bm{0},\, Q_t),
+  \label{eq:transition}
+\end{equation}
+where $\Delta t_t = t - (t-1)$ is the elapsed time between consecutive
+GPS fixes (in seconds) and
+\begin{equation}
+  F_t = \begin{pmatrix}
+    1 & 0 & \Delta t_t & 0 \\
+    0 & 1 & 0 & \Delta t_t \\
+    0 & 0 & 1 & 0 \\
+    0 & 0 & 0 & 1
+  \end{pmatrix}.
+\end{equation}
+
+The process noise $\w_t$ arises from unmodelled accelerations.
+Treating acceleration as white noise with standard deviation
+$\sigma_a$ and integrating twice yields the \emph{continuous Wiener
+process acceleration} (CWPA) noise covariance:
+\begin{equation}
+  Q_t = \sigma_a^2
+  \begin{pmatrix}
+    \Delta t_t^4/4 & 0              & \Delta t_t^3/2 & 0 \\
+    0              & \Delta t_t^4/4 & 0              & \Delta t_t^3/2 \\
+    \Delta t_t^3/2 & 0              & \Delta t_t^2   & 0 \\
+    0              & \Delta t_t^3/2 & 0              & \Delta t_t^2
+  \end{pmatrix}.
+  \label{eq:Q}
+\end{equation}
+
+\subsection{Measurement equation}
+
+Only position is observed:
+\begin{equation}
+  \z_t = H\,\x_t + \vv_t, \qquad \vv_t \sim \N(\bm{0},\, R),
+  \label{eq:measurement}
+\end{equation}
+where $H = [I_2 \mid \bm{0}_{2\times 2}]$ selects the position components
+and $R = \sigma_{\mathrm{GPS}}^2\,I_2$ is an isotropic measurement noise
+covariance.  Both noise sequences $\{\w_t\}$ and $\{\vv_t\}$ are mutually
+independent and independent over time, and are independent of the initial
+state.
+
+Under these assumptions, \eqref{eq:transition}--\eqref{eq:measurement}
+define a \textbf{linear Gaussian state-space model}.  The joint
+distribution over $(\x_{0:T}, \z_{1:T})$ is multivariate Gaussian, and
+all conditional distributions of interest are Gaussian with closed-form
+parameters.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Forward Kalman Filter}
+
+The Kalman filter computes the \emph{filtering distribution}
+$p(\x_t \given \z_{1:t}) = \N(\hat\x_{t|t},\, P_{t|t})$ recursively.
+
+\subsection{Initialisation}
+
+We initialise at $t=0$ (the first point of the segment) with position
+taken from the GPS fix and velocity set to zero:
+\begin{equation}
+  \hat\x_{0|0} = \begin{pmatrix} z_{0,x} \\ z_{0,y} \\ 0 \\ 0 \end{pmatrix},
+  \qquad
+  P_{0|0} = \operatorname{diag}\!\left(\sigma_{\mathrm{GPS}}^2,\,
+    \sigma_{\mathrm{GPS}}^2,\, \sigma_{v,0}^2,\, \sigma_{v,0}^2\right),
+\end{equation}
+where $\sigma_{v,0} = 3$\,m/s is a vague prior on initial speed.
+
+\subsection{Predict step}
+
+Marginalising over $\x_{t-1}$ using the transition \eqref{eq:transition}
+gives the \emph{one-step-ahead predictive distribution}
+$p(\x_t \given \z_{1:t-1}) = \N(\hat\x_{t|t-1},\, P_{t|t-1})$:
+\begin{align}
+  \hat\x_{t|t-1} &= F_t\,\hat\x_{t-1|t-1}, \label{eq:predict_mean}\\
+  P_{t|t-1}      &= F_t\,P_{t-1|t-1}\,F_t^\top + Q_t. \label{eq:predict_cov}
+\end{align}
+
+\subsection{Innovation}
+
+Define the \emph{innovation} (the prediction error in observation space):
+\begin{equation}
+  \y_t = \z_t - H\,\hat\x_{t|t-1},
+\end{equation}
+with innovation covariance
+\begin{equation}
+  S_t = H\,P_{t|t-1}\,H^\top + R.
+\end{equation}
+Under the model, $\y_t \sim \N(\bm{0}, S_t)$ when $\z_t$ is consistent
+with the predicted state.
+
+\subsection{Update step}
+
+Conditioning $p(\x_t \given \z_{1:t-1})$ on $\z_t$ via Bayes' rule gives
+\begin{align}
+  \hat\x_{t|t} &= \hat\x_{t|t-1} + K_t\,\y_t, \label{eq:update_mean}\\
+  P_{t|t}      &= (I - K_t H)\,P_{t|t-1},       \label{eq:update_cov}
+\end{align}
+where the \emph{Kalman gain}
+\begin{equation}
+  K_t = P_{t|t-1}\,H^\top\,S_t^{-1}
+\end{equation}
+is the matrix of regression coefficients of $\x_t$ on $\y_t$ under the
+joint predictive distribution.  Equivalently, $K_t$ minimises
+$\operatorname{tr}(P_{t|t})$, making the posterior variance as small
+as possible.
+
+\begin{remark}
+The update \eqref{eq:update_mean}--\eqref{eq:update_cov} is the standard
+formula for conditioning a joint Gaussian.  If we write
+$\binom{\x_t}{\z_t} \sim \N(\cdot, \Sigma)$ under the prior, the
+posterior mean is the prior mean plus the cross-covariance times the
+precision of $\z_t$ times the residual, which is exactly $K_t \y_t$.
+\end{remark}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Innovation Gating}
+
+Before the update step, each incoming GPS fix is subjected to an outlier
+test.  Under the model, the squared Mahalanobis distance of the innovation
+\begin{equation}
+  d_t^2 = \y_t^\top\,S_t^{-1}\,\y_t
+  \label{eq:mahal}
+\end{equation}
+follows a chi-squared distribution with $m = 2$ degrees of freedom
+(the dimension of $\z_t$) when the observation is genuine:
+\begin{equation}
+  d_t^2 \;\big|\; \text{inlier} \;\sim\; \chi^2_2.
+\end{equation}
+
+A fix is \emph{gated out} if $d_t^2 > g$, where $g$ is a threshold chosen
+from the $\chi^2_2$ quantile function.  Common choices are given in
+Table~\ref{tab:gate}.  When a fix is rejected the update step is skipped:
+$\hat\x_{t|t} = \hat\x_{t|t-1}$ and $P_{t|t} = P_{t|t-1}$.  The filter
+coasts on the dynamics model until the next accepted fix.
+
+\begin{table}[h]
+\centering
+\caption{Chi-squared gate thresholds for $\chi^2_2$.}
+\label{tab:gate}
+\begin{tabular}{lcc}
+\toprule
+Coverage & $g = \chi^2_2(p)$ & Effective $\sigma$-radius \\
+\midrule
+95.0\,\% &  5.99 & ${\approx}2.45\,\sigma_{\mathrm{eff}}$ \\
+99.0\,\% &  9.21 & ${\approx}3.03\,\sigma_{\mathrm{eff}}$ \\
+99.9\,\% & 13.82 & ${\approx}3.72\,\sigma_{\mathrm{eff}}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The default threshold $g = 13.82$ (99.9\,\%) is deliberately conservative:
+only measurements that are extraordinarily far from the predicted position
+are rejected outright, because a skier can in principle accelerate or
+change direction rapidly.  The smoother handles mild GPS noise without
+needing to gate it.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{RTS Backward Smoother}
+
+The forward Kalman filter is a \emph{causal} filter: $\hat\x_{t|t}$
+conditions only on $\z_{1:t}$.  The RTS smoother computes the full
+posterior
+\begin{equation}
+  p(\x_t \given \z_{1:T}) = \N(\hat\x_{t|T},\, P_{t|T})
+\end{equation}
+for all $t$ simultaneously, by making a single backward pass through the
+stored forward-filter output.
+
+\subsection{Derivation sketch}
+
+By the Markov property of the state-space model,
+\begin{equation}
+  p(\x_t \given \z_{1:T})
+  = \int p(\x_t \given \x_{t+1},\, \z_{1:t})\;
+         p(\x_{t+1} \given \z_{1:T})\; \mathrm{d}\x_{t+1}.
+\end{equation}
+The integrand is Gaussian in both factors.  The joint distribution of
+$(\x_t, \x_{t+1})$ given $\z_{1:t}$ is
+\begin{equation}
+  \begin{pmatrix} \x_t \\ \x_{t+1} \end{pmatrix} \Bigg|\, \z_{1:t}
+  \;\sim\;
+  \N\!\left(
+    \begin{pmatrix} \hat\x_{t|t} \\ \hat\x_{t+1|t} \end{pmatrix},\;
+    \begin{pmatrix} P_{t|t} & P_{t|t} F_{t+1}^\top \\
+                    F_{t+1} P_{t|t} & P_{t+1|t} \end{pmatrix}
+  \right).
+\end{equation}
+Conditioning $\x_t$ on $\x_{t+1}$ (standard Gaussian conditioning formula)
+and then marginalising over $\x_{t+1}$ using the already-computed smoothing
+distribution at $t+1$ yields the \textbf{RTS recursion}:
+\begin{align}
+  G_t &= P_{t|t}\,F_{t+1}^\top\,P_{t+1|t}^{-1}, \label{eq:gain_rts}\\[4pt]
+  \hat\x_{t|T} &= \hat\x_{t|t}
+                  + G_t\!\left(\hat\x_{t+1|T} - \hat\x_{t+1|t}\right),
+                  \label{eq:smooth_mean}\\[4pt]
+  P_{t|T}      &= P_{t|t}
+                  + G_t\!\left(P_{t+1|T} - P_{t+1|t}\right)G_t^\top,
+                  \label{eq:smooth_cov}
+\end{align}
+initialised with $\hat\x_{T|T}$ and $P_{T|T}$ from the forward filter
+(the final filtering distribution already equals the smoothing distribution
+at time $T$).
+
+\subsection{Interpretation}
+
+$G_t$ in \eqref{eq:gain_rts} is the cross-covariance of $\x_t$ and
+$\x_{t+1}$ (under the forward predictive distribution) scaled by the
+precision of $\x_{t+1}$.  It is the \emph{backward analogue} of the
+Kalman gain.
+
+Equation~\eqref{eq:smooth_mean} says: take the forward-filtered estimate
+$\hat\x_{t|t}$, compute how much the smoother revised $\hat\x_{t+1}$
+relative to the filter's prediction ($\hat\x_{t+1|T} - \hat\x_{t+1|t}$),
+and propagate that revision backwards through $G_t$.  If a clean GPS fix
+at time $t+3$ showed the skier 50\,m further north than predicted, the
+smoother pulls estimates at $t$, $t+1$, and $t+2$ northward as well,
+weighted by the smoother gain at each step.
+
+This is why the RTS smoother is fundamentally different from a one-sided
+exponential moving average or a Savitzky--Golay filter: future observations
+actively improve past estimates.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Hyperparameters}
+
+The model has three hyperparameters.  All are interpretable in physical
+units and can be tuned from domain knowledge or, in principle, by maximum
+marginal likelihood (EM algorithm on the innovations).
+
+\subsection{\texorpdfstring{$\sigma_{\mathrm{GPS}}$}{sigma\_GPS} — GPS measurement noise}
+
+\textbf{Default:} 5\,m.
+
+$\sigma_{\mathrm{GPS}}$ is the assumed one-sigma horizontal accuracy of the
+GPS receiver.  It enters the measurement covariance $R = \sigma_{\mathrm{GPS}}^2 I_2$
+and therefore the innovation covariance $S_t$ and Kalman gain $K_t$.
+
+\begin{itemize}
+  \item \textbf{Smaller $\sigma_{\mathrm{GPS}}$}: the filter trusts GPS fixes more.
+        The smoothed track stays closer to the raw observations.
+        Appropriate when the receiver is high-quality and conditions are
+        good (open terrain, strong satellite geometry).
+
+  \item \textbf{Larger $\sigma_{\mathrm{GPS}}$}: the filter trusts GPS fixes less
+        and relies more on the dynamics model.
+        The smoothed track is more regular but may cut corners.
+        Appropriate in forests or deep valleys where multipath is common.
+\end{itemize}
+
+The Kalman gain satisfies $K_t \to I$ as $\sigma_{\mathrm{GPS}} \to 0$
+(fully trust GPS) and $K_t \to 0$ as $\sigma_{\mathrm{GPS}} \to \infty$
+(ignore GPS, coast on the model).
+
+\subsection{\texorpdfstring{$\sigma_a$}{sigma\_a} — process noise / expected acceleration}
+
+\textbf{Default:} 1.5\,m/s$^2$.
+
+$\sigma_a$ characterises how much the skier's velocity is expected to
+change between consecutive fixes, and is the standard deviation of the
+latent acceleration.  It scales the entire process noise matrix $Q_t$
+in \eqref{eq:Q}.
+
+\begin{itemize}
+  \item \textbf{Smaller $\sigma_a$}: the model expects nearly constant velocity.
+        Turns and acceleration are penalised — the track is very smooth
+        but tight bends may be cut short.
+        Analogous to a large smoothing penalty $\lambda$ in a spline.
+
+  \item \textbf{Larger $\sigma_a$}: the model allows rapid changes in speed and
+        direction.  The smoother is more willing to follow the GPS closely.
+        Analogous to a small $\lambda$.
+\end{itemize}
+
+The trade-off between smoothing and fidelity is governed by the
+\emph{ratio} $\sigma_a / \sigma_{\mathrm{GPS}}$.  A useful rule of thumb:
+for a 1-second logging interval, $\sigma_a = 1$--$2$\,m/s$^2$ covers
+realistic skiing accelerations (typical values are 0.3--1.5\,m/s$^2$
+on groomed trails).  If the logging rate is lower (e.g.\ every 5\,s),
+$Q_t$ grows with $\Delta t^2$ so the model naturally allows more freedom
+between fixes without changing $\sigma_a$.
+
+\subsection{\texorpdfstring{$g$}{g} — innovation gate threshold}
+
+\textbf{Default:} 13.82\;($= \chi^2_2(0.999)$).
+
+$g$ is the chi-squared threshold used in the Mahalanobis gate test
+\eqref{eq:mahal}.  A fix is \emph{rejected} if $d_t^2 > g$.
+
+\begin{itemize}
+  \item \textbf{Smaller $g$} (e.g.\ 5.99 at 95\,\%): the gate is tighter.
+        More fixes are rejected and the smoother coasts on the model more
+        often.  Useful when the GPS is known to produce frequent hard
+        spikes, but risks discarding genuine rapid movements.
+
+  \item \textbf{Larger $g$} (e.g.\ 20): almost no fixes are rejected.
+        The smoother itself handles mild outliers by down-weighting them
+        via $K_t$ — but it cannot fully suppress a measurement 200\,m off
+        track.  The gate provides a hard safety net.
+\end{itemize}
+
+The default 99.9\,\% gate is deliberately permissive because the filter's
+own weighting already attenuates mild GPS noise.  Only measurements that
+are extremely improbable under the current motion model are discarded.
+
+\subsection{Summary table}
+
+\begin{table}[h]
+\centering
+\caption{Hyperparameter reference.}
+\begin{tabular}{llll}
+\toprule
+Parameter & Default & Unit & Effect of increasing \\
+\midrule
+$\sigma_{\mathrm{GPS}}$ & 5.0   & m        & Less trust in GPS; smoother track \\
+$\sigma_a$              & 1.5   & m/s$^2$  & More dynamics allowed; track follows GPS more closely \\
+$g$                     & 13.82 & ---      & Fewer points rejected; more smoothed by the filter \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Comparison with Smoothing Splines}
+
+A cubic smoothing spline minimises
+\begin{equation}
+  \sum_{t=1}^T \bigl(f(t_t) - z_t\bigr)^2
+  + \lambda \int \bigl[f''(u)\bigr]^2\, \mathrm{d}u,
+  \label{eq:spline}
+\end{equation}
+penalising curvature globally.  The differences from the Kalman smoother
+are:
+
+\begin{enumerate}
+  \item \textbf{Motion model.}
+        The spline has no concept of velocity or physically plausible
+        acceleration.  The Kalman model encodes Newton's laws: position
+        changes at the rate of velocity, and velocity changes due to
+        acceleration.  This matters at the ends of the track and across
+        gaps caused by gated outliers.
+
+  \item \textbf{Outlier robustness.}
+        The spline objective \eqref{eq:spline} is a sum of squared
+        residuals; a single 200\,m spike distorts the fit over a wide
+        neighbourhood.  The Kalman gate removes such measurements entirely
+        before the smoother sees them.
+
+  \item \textbf{Variable time steps.}
+        The spline in \eqref{eq:spline} treats observations as equally
+        spaced unless the knot structure is adapted.  The Kalman model
+        uses the actual timestamp differences $\Delta t_t$ in both $F_t$
+        and $Q_t$, so it naturally handles irregular sampling.
+
+  \item \textbf{Two-dimensional consistency.}
+        Applying a spline independently to latitude and longitude can
+        produce paths that violate the joint dynamics (e.g.\ an
+        impossibly sharp change in the north--south direction while
+        east--west is smooth).  The Kalman model couples $x$ and $y$
+        through the shared velocity state and covariance matrix.
+
+  \item \textbf{Uncertainty quantification.}
+        The Kalman smoother produces $P_{t|T}$, a full covariance matrix
+        for each smoothed point.  This can be used to construct credible
+        intervals on the position or speed at any time step.
+        The smoothing spline provides no such uncertainty.
+\end{enumerate}
+
+\end{document}
