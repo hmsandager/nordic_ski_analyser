@@ -115,6 +115,12 @@ _SEG_COLOURS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
                  "#8c564b", "#e377c2", "#7f7f7f"]
 
 
+def _hex_to_rgba(hex_colour: str, alpha: float) -> str:
+    h = hex_colour.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def build_speed_chart(track: GPXTrack, df: pd.DataFrame, top: pd.DataFrame) -> go.Figure:
     """
     Build a Plotly Figure with two panels sharing the x-axis (distance):
@@ -132,6 +138,29 @@ def build_speed_chart(track: GPXTrack, df: pd.DataFrame, top: pd.DataFrame) -> g
         seg    = df[df["segment"] == seg_id]
         colour = _SEG_COLOURS[seg_id % len(_SEG_COLOURS)]
         label  = f"Segment {seg_id + 1}"
+
+        # ── 95 % CI shaded band (row 1) ───────────────────────────────────────
+        if "speed_std" in seg.columns:
+            z = 1.96
+            upper = (seg["speed_ms"] + z * seg["speed_std"]) * 3.6
+            lower = ((seg["speed_ms"] - z * seg["speed_std"]).clip(lower=0)) * 3.6
+            fill_col = _hex_to_rgba(colour, 0.15)
+            x_km = seg["cum_dist_m"] / 1000
+            # Upper boundary (invisible line — anchor for fill)
+            fig.add_trace(go.Scatter(
+                x=x_km, y=upper,
+                mode="lines", line=dict(width=0),
+                legendgroup=label, showlegend=False,
+                hoverinfo="skip",
+            ), row=1, col=1)
+            # Lower boundary with fill back to upper
+            fig.add_trace(go.Scatter(
+                x=x_km, y=lower,
+                mode="lines", line=dict(width=0),
+                fill="tonexty", fillcolor=fill_col,
+                legendgroup=label, showlegend=False,
+                hoverinfo="skip",
+            ), row=1, col=1)
 
         # ── Speed trace (row 1) ────────────────────────────────────────────────
         fig.add_trace(go.Scatter(

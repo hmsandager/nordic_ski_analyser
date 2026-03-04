@@ -52,7 +52,8 @@ class Point:
     lon: float
     ele: Optional[float]
     time: datetime
-    speed_ms: Optional[float] = None   # set by Kalman smoother; None on raw points
+    speed_ms:  Optional[float] = None  # set by Kalman smoother; None on raw points
+    speed_std: Optional[float] = None  # 1-sigma speed uncertainty from RTS covariance
 
 
 # ── Geometry ──────────────────────────────────────────────────────────────────
@@ -292,7 +293,18 @@ def kalman_smooth(
     # Elevation uses the median-smoothed value; speed from the RTS velocity state.
     result: List[Point] = []
     for i, pt in enumerate(points):
-        speed_ms = float(math.sqrt(xs[i, 2] ** 2 + xs[i, 3] ** 2))
+        vx, vy = xs[i, 2], xs[i, 3]
+        speed_ms = float(math.sqrt(vx ** 2 + vy ** 2))
+
+        # Speed uncertainty via error propagation: var(|v|) = J @ P_vv @ J^T
+        # where J = [vx/|v|, vy/|v|] and P_vv is the 2×2 velocity sub-covariance.
+        if speed_ms > 0:
+            J = np.array([vx / speed_ms, vy / speed_ms])
+            speed_var = float(J @ Ps[i, 2:4, 2:4] @ J)
+            speed_std = math.sqrt(max(speed_var, 0.0))
+        else:
+            speed_std = float(math.sqrt(Ps[i, 2, 2] + Ps[i, 3, 3]))
+
         ele = None if np.isnan(ele_smooth[i]) else float(ele_smooth[i])
         result.append(Point(
             lat=lat0_deg + xs[i, 1] / m_per_deg_lat,
@@ -300,6 +312,7 @@ def kalman_smooth(
             ele=ele,
             time=pt.time,
             speed_ms=speed_ms,
+            speed_std=speed_std,
         ))
 
     return result, n_gated
@@ -648,6 +661,7 @@ class GPXTrack:
                     "ele":        pt.ele,
                     "time":       pt.time,
                     "speed_ms":   speed,
+                    "speed_std":  pt.speed_std if pt.speed_std is not None else 0.0,
                     "cum_dist_m": cum_dist,
                 })
                 cum_dist += d
