@@ -8,6 +8,8 @@ Setup
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import streamlit as st
 from streamlit_folium import st_folium
 
@@ -33,6 +35,24 @@ st.set_page_config(
 CLIENT_ID     = st.secrets["strava"]["client_id"]
 CLIENT_SECRET = st.secrets["strava"]["client_secret"]
 REDIRECT_URI  = st.secrets["strava"]["redirect_uri"]
+
+# ── Activity type groups & time period options ────────────────────────────────
+
+_SPORT_GROUPS = {
+    "🎿 Ski":   {"NordicSki", "BackcountrySki", "AlpineSki", "RollerSki"},
+    "🏃 Run":   {"Run", "TrailRun", "VirtualRun"},
+    "🚴 Bike":  {"Ride", "MountainBikeRide", "GravelRide", "VirtualRide",
+                  "EBikeRide", "EMountainBikeRide"},
+    "⛸️ Skate": {"InlineSkate"},
+}
+
+_TIME_OPTIONS = {
+    "All time":     None,
+    "This year":    lambda: datetime(datetime.now().year, 1, 1, tzinfo=timezone.utc),
+    "Last 90 days": lambda: datetime.now(timezone.utc) - timedelta(days=90),
+    "Last 30 days": lambda: datetime.now(timezone.utc) - timedelta(days=30),
+    "Last 7 days":  lambda: datetime.now(timezone.utc) - timedelta(days=7),
+}
 
 # ── Cached analysis functions ─────────────────────────────────────────────────
 
@@ -192,10 +212,42 @@ else:
     activities = _load_activities(token)
 
     if not activities:
-        st.info("No Nordic Ski activities found on your Strava account.")
+        st.info("No activities found on your Strava account.")
         st.stop()
 
-    options      = {activity_label(a): a for a in activities}
+    # ── Activity filters ──────────────────────────────────────────────────────
+    col_type, col_time = st.columns([3, 2])
+    with col_type:
+        selected_groups = st.multiselect(
+            "Activity type",
+            list(_SPORT_GROUPS.keys()),
+            default=list(_SPORT_GROUPS.keys()),
+        )
+    with col_time:
+        time_label = st.selectbox("Time period", list(_TIME_OPTIONS.keys()))
+
+    allowed_types: set = set()
+    for g in selected_groups:
+        allowed_types |= _SPORT_GROUPS[g]
+
+    since_fn = _TIME_OPTIONS[time_label]
+    since_dt = since_fn() if since_fn else None
+
+    filtered = [
+        a for a in activities
+        if (a.get("sport_type") or a.get("type", "")) in allowed_types
+        and (
+            since_dt is None
+            or datetime.strptime(a["start_date"], "%Y-%m-%dT%H:%M:%SZ")
+               .replace(tzinfo=timezone.utc) >= since_dt
+        )
+    ]
+
+    if not filtered:
+        st.info("No activities match the current filters.")
+        st.stop()
+
+    options      = {activity_label(a): a for a in filtered}
     chosen_label = st.selectbox("Select activity", list(options.keys()))
     chosen       = options[chosen_label]
 

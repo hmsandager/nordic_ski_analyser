@@ -3,7 +3,7 @@ Strava API data fetching.
 
 Key functions
 ─────────────
-    list_activities(token)              → list of activity dicts (NordicSki only)
+    list_activities(token)              → list of all activity dicts, newest first
     fetch_points(token, activity)       → List[Point] ready for GPXTrack.from_points()
 """
 from __future__ import annotations
@@ -17,6 +17,19 @@ from gpx_filter import Point
 
 _API = "https://www.strava.com/api/v3"
 
+# Icons shown next to each activity in the selectbox
+_SPORT_ICON: dict[str, str] = {}
+for _icon, _types in [
+    ("🎿", {"NordicSki", "BackcountrySki", "AlpineSki", "RollerSki"}),
+    ("🏃", {"Run", "TrailRun", "VirtualRun"}),
+    ("🚴", {"Ride", "MountainBikeRide", "GravelRide", "VirtualRide",
+             "EBikeRide", "EMountainBikeRide"}),
+    ("⛸️", {"InlineSkate"}),
+    ("🥾", {"Hike", "Walk"}),
+]:
+    for _t in _types:
+        _SPORT_ICON[_t] = _icon
+
 
 def _headers(access_token: str) -> dict:
     return {"Authorization": f"Bearer {access_token}"}
@@ -24,7 +37,7 @@ def _headers(access_token: str) -> dict:
 
 def list_activities(access_token: str, max_pages: int = 10) -> List[dict]:
     """
-    Return all NordicSki activities for the authenticated athlete, newest first.
+    Return all activities for the authenticated athlete, newest first.
     Paginates automatically up to max_pages * 50 activities.
     """
     activities = []
@@ -39,10 +52,7 @@ def list_activities(access_token: str, max_pages: int = 10) -> List[dict]:
         batch = resp.json()
         if not batch:
             break
-        for act in batch:
-            # Strava uses both 'type' (legacy) and 'sport_type' (current)
-            if act.get("sport_type") == "NordicSki" or act.get("type") == "NordicSki":
-                activities.append(act)
+        activities.extend(batch)
         if len(batch) < 50:
             break
 
@@ -90,9 +100,11 @@ def fetch_points(access_token: str, activity: dict) -> List[Point]:
 
 def activity_label(act: dict) -> str:
     """Human-readable label for a selectbox."""
+    sport    = act.get("sport_type") or act.get("type", "")
+    icon     = _SPORT_ICON.get(sport, "🏅")
     date     = act["start_date_local"][:10]
     name     = act["name"]
     dist_km  = act["distance"] / 1000
     gain     = act.get("total_elevation_gain", 0)
     duration = act["moving_time"] // 60
-    return f"{date}  ·  {name}  ·  {dist_km:.1f} km  ·  {duration} min  ·  ↑{gain:.0f} m"
+    return f"{icon} {date}  ·  {name}  ·  {dist_km:.1f} km  ·  {duration} min  ·  ↑{gain:.0f} m"
