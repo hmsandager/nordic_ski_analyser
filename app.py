@@ -1,5 +1,5 @@
 """
-Nordic Ski Analysis — Streamlit app.
+Activity Analysis — Streamlit app.
 
 Setup
 ─────
@@ -127,7 +127,7 @@ gpx_mode  = "gpx_bytes" in st.session_state
 # ── Landing page (neither mode active) ───────────────────────────────────────
 
 if not strava_ok and not gpx_mode:
-    st.title("⛷ Nordic Ski Analysis")
+    st.title("Activity Analysis")
     st.markdown("Connect your Strava account or upload a GPX file to get started.")
     st.markdown("")
 
@@ -197,7 +197,7 @@ with st.sidebar:
 
 # ── Load & analyse ────────────────────────────────────────────────────────────
 
-st.title("⛷ Nordic Ski Analysis")
+st.title("Activity Analysis")
 
 if gpx_mode:
     track = _analyse_gpx(
