@@ -130,41 +130,6 @@ def count_trkpt(data: bytes) -> int:
     return sum(1 for el in root.iter() if _local(el.tag) == "trkpt")
 
 
-# ── Filter functions ──────────────────────────────────────────────────────────
-
-def filter_outliers(
-    points: List[Point],
-    base_dist: float = 30.0,
-) -> Tuple[List[Point], int]:
-    """
-    Remove GPS spikes using a growing-threshold rule.
-
-    After removing N consecutive points the threshold for the next candidate
-    grows to (N+1) * base_dist.  This lets the track recover from a brief
-    spike: a point returning close to the last good position is accepted once
-    it falls within the expanded radius.
-
-    Returns (filtered_points, n_removed).
-    """
-    if not points:
-        return points, 0
-
-    accepted: List[Point] = [points[0]]
-    n_consecutive_removed = 0
-    n_removed = 0
-
-    for pt in points[1:]:
-        threshold = (n_consecutive_removed + 1) * base_dist
-        if haversine(accepted[-1], pt) <= threshold:
-            accepted.append(pt)
-            n_consecutive_removed = 0
-        else:
-            n_consecutive_removed += 1
-            n_removed += 1
-
-    return accepted, n_removed
-
-
 def kalman_smooth(
     points: List[Point],
     sigma_gps: float = 10.0,
