@@ -130,73 +130,6 @@ def count_trkpt(data: bytes) -> int:
     return sum(1 for el in root.iter() if _local(el.tag) == "trkpt")
 
 
-# ── Filter functions ──────────────────────────────────────────────────────────
-
-def _adaptive_speed_gate(
-    points: List[Point],
-    max_jump_factor: float,
-    window_sec: float = 5.0,
-) -> List[Point]:
-    """
-    Remove GPS spikes using a speed-adaptive threshold based solely on
-    previously accepted points.
-
-    Local speed is the median of raw step speeds among the accepted points
-    within the preceding ``window_sec`` seconds.  Because only already-
-    accepted (non-spike) points contribute to the estimate, a cluster of
-    outliers never inflates the threshold — the speed estimate stays
-    grounded in true movement regardless of how many consecutive spikes
-    occur.
-
-    A point is rejected when its implied speed from the last accepted point
-    exceeds ``max_jump_factor × local_speed_estimate``.
-
-    Hard floor: 3 m/s (~11 km/h) so early-segment points with a still-
-    forming speed history are not over-filtered.
-    """
-    ABS_FLOOR = 3.0   # m/s
-
-    if len(points) < 2:
-        return points
-
-    accepted: List[Point] = [points[0]]
-
-    for pt in points[1:]:
-        # ── local speed from recently accepted raw points only ─────────────────
-        t_pt = pt.time
-        recent: List[Point] = []
-        for p in reversed(accepted):
-            if (t_pt - p.time).total_seconds() > window_sec:
-                break
-            recent.append(p)
-        recent.reverse()
-
-        if len(recent) >= 2:
-            step_speeds = []
-            for j in range(1, len(recent)):
-                dt_j = (recent[j].time - recent[j - 1].time).total_seconds()
-                if dt_j > 0:
-                    step_speeds.append(haversine(recent[j - 1], recent[j]) / dt_j)
-            if step_speeds:
-                step_speeds.sort()
-                local_speed = step_speeds[len(step_speeds) // 2]   # median
-            else:
-                local_speed = 0.0
-        else:
-            local_speed = 0.0
-
-        threshold = max(max_jump_factor * local_speed, ABS_FLOOR)
-
-        dt = (pt.time - accepted[-1].time).total_seconds()
-        if dt <= 0:
-            accepted.append(pt)
-            continue
-        if haversine(accepted[-1], pt) / dt <= threshold:
-            accepted.append(pt)
-
-    return accepted
-
-
 def kalman_smooth(
     points: List[Point],
     sigma_gps: float = 10.0,
@@ -551,7 +484,6 @@ class GPXTrack:
         sigma_a_base: float = 0.8,
         sigma_a_sensitivity: float = 1.2,
         gate_alpha: float = 0.01,
-        max_jump_factor: Optional[float] = 3.0,
         pause_speed_ms: float = 0.8,
         pause_window_sec: float = 6.0,
         pause_min_sec: float = 8.0,
@@ -564,7 +496,6 @@ class GPXTrack:
             sigma_a_base=sigma_a_base,
             sigma_a_sensitivity=sigma_a_sensitivity,
             gate_alpha=gate_alpha,
-            max_jump_factor=max_jump_factor,
             pause_speed_ms=pause_speed_ms,
             pause_window_sec=pause_window_sec,
             pause_min_sec=pause_min_sec,
@@ -583,7 +514,6 @@ class GPXTrack:
         sigma_a_base: float = 0.8,
         sigma_a_sensitivity: float = 1.2,
         gate_alpha: float = 0.01,
-        max_jump_factor: Optional[float] = 3.0,
         pause_speed_ms: float = 0.8,
         pause_window_sec: float = 6.0,
         pause_min_sec: float = 8.0,
@@ -598,7 +528,6 @@ class GPXTrack:
             sigma_a_base=sigma_a_base,
             sigma_a_sensitivity=sigma_a_sensitivity,
             gate_alpha=gate_alpha,
-            max_jump_factor=max_jump_factor,
             pause_speed_ms=pause_speed_ms,
             pause_window_sec=pause_window_sec,
             pause_min_sec=pause_min_sec,
@@ -629,13 +558,6 @@ class GPXTrack:
             seg = seg[trim:]   # drop noisy GPS fixes at segment start
             if len(seg) < 2:
                 continue
-
-            if p["max_jump_factor"] is not None:
-                n_before = len(seg)
-                seg = _adaptive_speed_gate(seg, max_jump_factor=p["max_jump_factor"])
-                self._n_gated += n_before - len(seg)
-                if len(seg) < 2:
-                    continue
 
             smoothed, n_gated = kalman_smooth(seg, **kalman_kwargs)
             self._n_gated += n_gated
