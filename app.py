@@ -190,10 +190,15 @@ with st.sidebar:
 
     st.divider()
     st.markdown("**Spike filter**")
-    max_jump_factor = st.slider("Max jump factor", 1.5, 6.0, 3.0, 0.5)
-    st.caption("A GPS step is flagged if its implied speed exceeds this multiple "
-               "of the local Kalman speed. At 20 km/h the threshold is 3× = 60 km/h; "
-               "at 60 km/h it is 3× = 180 km/h.")
+    use_spike_filter = st.checkbox("Enable adaptive spike filter", value=True)
+    if use_spike_filter:
+        _jump_factor = st.slider("Max jump factor", 1.5, 6.0, 3.0, 0.5)
+        st.caption("A GPS step is flagged if its implied speed exceeds this multiple "
+                   "of the local Kalman speed. At 20 km/h the threshold is 3× = 60 km/h; "
+                   "at 60 km/h it is 3× = 180 km/h.")
+        max_jump_factor = _jump_factor
+    else:
+        max_jump_factor = None
 
     st.divider()
     st.markdown("**Pause detection**")

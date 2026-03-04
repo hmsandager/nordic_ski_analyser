@@ -135,7 +135,7 @@ def count_trkpt(data: bytes) -> int:
 def _adaptive_speed_gate(
     raw_seg: List[Point],
     smoothed_seg: List[Point],
-    max_jump_factor: float = 3.0,
+    max_jump_factor: float,
     window_sec: float = 5.0,
 ) -> List[Point]:
     """
@@ -543,7 +543,7 @@ class GPXTrack:
         sigma_a_base: float = 0.8,
         sigma_a_sensitivity: float = 1.2,
         gate_alpha: float = 0.01,
-        max_jump_factor: float = 3.0,
+        max_jump_factor: Optional[float] = 3.0,
         pause_speed_ms: float = 0.8,
         pause_window_sec: float = 6.0,
         pause_min_sec: float = 8.0,
@@ -575,7 +575,7 @@ class GPXTrack:
         sigma_a_base: float = 0.8,
         sigma_a_sensitivity: float = 1.2,
         gate_alpha: float = 0.01,
-        max_jump_factor: float = 3.0,
+        max_jump_factor: Optional[float] = 3.0,
         pause_speed_ms: float = 0.8,
         pause_window_sec: float = 6.0,
         pause_min_sec: float = 8.0,
@@ -622,21 +622,22 @@ class GPXTrack:
             if len(seg) < 2:
                 continue
 
-            # First Kalman pass: obtain local speed estimates for adaptive gating
-            smoothed_pass1, _ = kalman_smooth(seg, **kalman_kwargs)
+            if p["max_jump_factor"] is not None:
+                # First Kalman pass: obtain local speed estimates for adaptive gating
+                smoothed_pass1, _ = kalman_smooth(seg, **kalman_kwargs)
 
-            # Adaptive speed gate: reject raw points whose step speed exceeds
-            # max_jump_factor × local Kalman speed estimate
-            n_before = len(seg)
-            seg = _adaptive_speed_gate(
-                seg, smoothed_pass1,
-                max_jump_factor=p["max_jump_factor"],
-            )
-            self._n_gated += n_before - len(seg)
-            if len(seg) < 2:
-                continue
+                # Adaptive speed gate: reject raw points whose step speed exceeds
+                # max_jump_factor × local Kalman speed estimate
+                n_before = len(seg)
+                seg = _adaptive_speed_gate(
+                    seg, smoothed_pass1,
+                    max_jump_factor=p["max_jump_factor"],
+                )
+                self._n_gated += n_before - len(seg)
+                if len(seg) < 2:
+                    continue
 
-            # Second Kalman pass on the cleaned segment
+            # Final Kalman pass (second pass if gate enabled, only pass otherwise)
             smoothed, n_gated = kalman_smooth(seg, **kalman_kwargs)
             self._n_gated += n_gated
 
