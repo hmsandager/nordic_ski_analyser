@@ -167,9 +167,9 @@ def filter_outliers(
 
 def kalman_smooth(
     points: List[Point],
-    sigma_gps: float = 15.0,
+    sigma_gps: float = 10.0,
     sigma_a_base: float = 0.8,
-    sigma_a_sensitivity: float = 2.0,
+    sigma_a_sensitivity: float = 1.2,
     gate_alpha: float = 0.01,
 ) -> Tuple[List[Point], int]:
     """
@@ -515,9 +515,9 @@ class GPXTrack:
         path: str,
         gap_sec: float = 120.0,
         segment_start_trim: int = 60,
-        sigma_gps: float = 15.0,
+        sigma_gps: float = 10.0,
         sigma_a_base: float = 0.8,
-        sigma_a_sensitivity: float = 2.0,
+        sigma_a_sensitivity: float = 1.2,
         gate_alpha: float = 0.01,
         pause_speed_ms: float = 0.8,
         pause_window_sec: float = 6.0,
@@ -545,9 +545,9 @@ class GPXTrack:
         points: List[Point],
         gap_sec: float = 120.0,
         segment_start_trim: int = 60,
-        sigma_gps: float = 15.0,
+        sigma_gps: float = 10.0,
         sigma_a_base: float = 0.8,
-        sigma_a_sensitivity: float = 2.0,
+        sigma_a_sensitivity: float = 1.2,
         gate_alpha: float = 0.01,
         pause_speed_ms: float = 0.8,
         pause_window_sec: float = 6.0,
