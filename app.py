@@ -25,7 +25,7 @@ from plot_stats import (
 # ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Nordic Ski Analysis",
+    page_title="Activity Analysis",
     page_icon="⛷",
     layout="wide",
 )
