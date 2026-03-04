@@ -60,6 +60,7 @@ _TIME_OPTIONS = {
 def _analyse_gpx(gpx_bytes: bytes, gpx_name: str,
                  sigma_gps: float, sigma_a_base: float, sigma_a_sensitivity: float,
                  segment_start_trim: int,
+                 max_speed_ms: float,
                  pause_speed_ms: float, pause_min_sec: float) -> GPXTrack:
     points = parse_gpx_bytes(gpx_bytes)
     if not points:
@@ -70,6 +71,7 @@ def _analyse_gpx(gpx_bytes: bytes, gpx_name: str,
         sigma_a_base=sigma_a_base,
         sigma_a_sensitivity=sigma_a_sensitivity,
         segment_start_trim=segment_start_trim,
+        max_speed_ms=max_speed_ms,
         pause_speed_ms=pause_speed_ms,
         pause_min_sec=pause_min_sec,
     )
@@ -86,6 +88,7 @@ def _load_activities(token: str) -> list:
 def _fetch_and_analyse(token: str, activity_id: int, _activity: dict,
                        sigma_gps: float, sigma_a_base: float, sigma_a_sensitivity: float,
                        segment_start_trim: int,
+                       max_speed_ms: float,
                        pause_speed_ms: float, pause_min_sec: float) -> GPXTrack:
     points = fetch_points(token, _activity)
     if not points:
@@ -96,6 +99,7 @@ def _fetch_and_analyse(token: str, activity_id: int, _activity: dict,
         sigma_a_base=sigma_a_base,
         sigma_a_sensitivity=sigma_a_sensitivity,
         segment_start_trim=segment_start_trim,
+        max_speed_ms=max_speed_ms,
         pause_speed_ms=pause_speed_ms,
         pause_min_sec=pause_min_sec,
     )
@@ -185,6 +189,12 @@ with st.sidebar:
     start_trim = st.slider("Trim points at segment start", 0, 120, 60)
 
     st.divider()
+    st.markdown("**Spike filter**")
+    max_speed = st.slider("Max speed gate (km/h)", 20, 120, 60, 5)
+    st.caption("Points implying a sudden jump above this speed are removed "
+               "before Kalman smoothing.")
+
+    st.divider()
     st.markdown("**Pause detection**")
     pause_speed = st.slider("Pause threshold (km/h)", 0.5, 5.0, 2.9, 0.1)
     pause_min   = st.slider("Min pause duration (s)", 5, 60, 8)
@@ -204,6 +214,7 @@ if gpx_mode:
         st.session_state.gpx_bytes, st.session_state.gpx_name,
         sigma_gps, sigma_a_base, sigma_a_sens,
         segment_start_trim=start_trim,
+        max_speed_ms=max_speed / 3.6,
         pause_speed_ms=pause_speed / 3.6,
         pause_min_sec=float(pause_min),
     )
@@ -255,6 +266,7 @@ else:
         token, chosen["id"], chosen,
         sigma_gps, sigma_a_base, sigma_a_sens,
         segment_start_trim=start_trim,
+        max_speed_ms=max_speed / 3.6,
         pause_speed_ms=pause_speed / 3.6,
         pause_min_sec=float(pause_min),
     )

@@ -130,6 +130,40 @@ def count_trkpt(data: bytes) -> int:
     return sum(1 for el in root.iter() if _local(el.tag) == "trkpt")
 
 
+# ── Filter functions ──────────────────────────────────────────────────────────
+
+def _speed_gate(
+    points: List[Point],
+    max_speed_ms: float = 60 / 3.6,
+) -> List[Point]:
+    """
+    Remove points that represent a sudden forward GPS spike.
+
+    For each point the implied speed from the previous *accepted* point is
+    computed (distance / elapsed time).  If it exceeds max_speed_ms the point
+    is dropped — it represents an implausibly large acceleration that cannot
+    be a real movement at the GPS recording rate.
+
+    Mahalanobis gating can miss spikes displaced *ahead in the direction of
+    travel* because the velocity state aligns with them; this raw check
+    catches them regardless of direction.
+
+    Default 60 km/h (16.7 m/s) — comfortably above real Nordic ski speeds
+    but well below any GPS multipath spike (~100+ m in 1 s).
+    """
+    if len(points) < 2:
+        return points
+    accepted: List[Point] = [points[0]]
+    for pt in points[1:]:
+        dt = (pt.time - accepted[-1].time).total_seconds()
+        if dt <= 0:
+            accepted.append(pt)
+            continue
+        if haversine(accepted[-1], pt) / dt <= max_speed_ms:
+            accepted.append(pt)
+    return accepted
+
+
 def kalman_smooth(
     points: List[Point],
     sigma_gps: float = 10.0,
@@ -484,6 +518,7 @@ class GPXTrack:
         sigma_a_base: float = 0.8,
         sigma_a_sensitivity: float = 1.2,
         gate_alpha: float = 0.01,
+        max_speed_ms: float = 60 / 3.6,
         pause_speed_ms: float = 0.8,
         pause_window_sec: float = 6.0,
         pause_min_sec: float = 8.0,
@@ -496,6 +531,7 @@ class GPXTrack:
             sigma_a_base=sigma_a_base,
             sigma_a_sensitivity=sigma_a_sensitivity,
             gate_alpha=gate_alpha,
+            max_speed_ms=max_speed_ms,
             pause_speed_ms=pause_speed_ms,
             pause_window_sec=pause_window_sec,
             pause_min_sec=pause_min_sec,
@@ -514,6 +550,7 @@ class GPXTrack:
         sigma_a_base: float = 0.8,
         sigma_a_sensitivity: float = 1.2,
         gate_alpha: float = 0.01,
+        max_speed_ms: float = 60 / 3.6,
         pause_speed_ms: float = 0.8,
         pause_window_sec: float = 6.0,
         pause_min_sec: float = 8.0,
@@ -528,6 +565,7 @@ class GPXTrack:
             sigma_a_base=sigma_a_base,
             sigma_a_sensitivity=sigma_a_sensitivity,
             gate_alpha=gate_alpha,
+            max_speed_ms=max_speed_ms,
             pause_speed_ms=pause_speed_ms,
             pause_window_sec=pause_window_sec,
             pause_min_sec=pause_min_sec,
@@ -550,6 +588,9 @@ class GPXTrack:
         trim = p["segment_start_trim"]
         for seg in raw_segments:
             seg = seg[trim:]   # drop noisy GPS fixes at segment start
+            if len(seg) < 2:
+                continue
+            seg = _speed_gate(seg, max_speed_ms=p["max_speed_ms"])
             if len(seg) < 2:
                 continue
             smoothed, n_gated = kalman_smooth(
